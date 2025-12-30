@@ -1,0 +1,124 @@
+//@version=5
+indicator("Silver Hybrid Master Pro [VXSLV & Hard-Cap]", overlay=true, max_labels_count=500)
+
+// --- 1. INPUTS ---
+vortex_grp     = "Vortex & Trend Parameter"
+vortex_len     = input.int(14, "Vortex Periode", group=vortex_grp)
+ema_len        = input.int(10, "Vortex EMA Glättung (Silber)", group=vortex_grp)
+adx_len        = input.int(14, "ADX Periode", group=vortex_grp)
+adx_entry      = input.int(25, "ADX Einstieg", group=vortex_grp)
+adx_exit       = input.int(20, "ADX Ausstieg (Hysterese)", group=vortex_grp)
+
+risk_grp       = "Risikomanagement (VXSLV & Hard-Cap)"
+vxslv_ticker   = input.symbol("VXSLV", "Silver VIX Datenquelle", group=risk_grp)
+vix_critical   = input.float(38.0, "VXSLV Kritisch (Tight TSL)", group=risk_grp)
+hebel          = input.float(3.0, "Hebel (z.B. 3 für 3LSI)", group=risk_grp)
+atr_mult_std   = input.float(3.5, "Standard ATR Mult", group=risk_grp)
+atr_mult_tight = input.float(2.0, "Tight ATR Mult (Vola-Schutz)", group=risk_grp)
+hard_cap_pct   = input.float(12.0, "Hard-Cap Stop % (ungehebelt)", group=risk_grp)
+
+// --- 2. DATENBESCHAFFUNG & INDIKATOREN ---
+vxslv_val = request.security(vxslv_ticker, "D", close)
+
+get_vortex() =>
+    vmp = math.abs(high - low[1]), vmm = math.abs(low - high[1])
+    tr  = math.max(high - low, math.abs(high - close[1]), math.abs(low - close[1]))
+    [vmp, vmm, tr]
+
+// Master Trend (3-Tage-Basis für Metalle)
+[w_vmp, w_vmm, w_tr] = request.security(syminfo.tickerid, "3D", get_vortex(), lookahead=barmerge.lookahead_off)
+w_vi_plus  = ta.sma(w_vmp, vortex_len) * vortex_len
+w_vi_minus = ta.sma(w_vmm, vortex_len) * vortex_len
+master_trend_long = w_vi_plus > w_vi_minus
+
+// Daily Signals
+[d_vmp, d_vmm, d_tr] = get_vortex()
+vi_plus_raw  = (ta.sma(d_vmp, vortex_len) * vortex_len) / (ta.sma(d_tr, vortex_len) * vortex_len)
+vi_minus_raw = (ta.sma(d_vmm, vortex_len) * vortex_len) / (ta.sma(d_tr, vortex_len) * vortex_len)
+vi_plus_ema  = ta.ema(vi_plus_raw, ema_len), vi_minus_ema = ta.ema(vi_minus_raw, ema_len)
+
+[_, _, adx] = ta.dmi(adx_len, adx_len)
+atr = ta.atr(14)
+
+// --- 3. DYNAMISCHE TSL LOGIK ---
+// Silber Regime-Check: ADX über 50 ODER VXSLV über 38
+is_extreme = adx > 50 or vxslv_val > vix_critical
+current_mult = is_extreme ? atr_mult_tight : atr_mult_std
+
+// Hard-Cap Logik (max 12% ungehebelt = 36% gehebelt)
+tsl_atr_pct = (atr * current_mult / close) * 100 * hebel
+tsl_hard_pct = hard_cap_pct * hebel
+tsl_final_pct = math.min(tsl_atr_pct, tsl_hard_pct)
+
+// --- 4. POSITION MANAGEMENT ---
+var int pos = 0
+var float peak = 0.0
+var bool locked = false
+
+long_cond  = adx > adx_entry and master_trend_long and vi_plus_ema > vi_minus_ema
+short_cond = adx > adx_entry and not master_trend_long and vi_minus_ema > vi_plus_ema
+
+if pos == 0 and vi_minus_ema > vi_plus_ema
+    locked := false
+
+buy_long  = long_cond and pos != 1 and not locked
+buy_short = short_cond and pos != -1 and not locked
+exit_sig  = (pos == 1 and (adx < adx_exit or not (master_trend_long and vi_plus_ema > vi_minus_ema))) or 
+             (pos == -1 and (adx < adx_exit or not (not master_trend_long and vi_minus_ema > vi_plus_ema)))
+
+if buy_long
+    pos := 1, peak := high
+    alert("ENTRY LONG SILVER (3LSI): Setze TSL auf " + str.tostring(tsl_final_pct, "#.##") + "%", alert.freq_once_per_bar)
+
+if buy_short
+    pos := -1, peak := low
+    alert("ENTRY SHORT SILVER (3SSI): Setze TSL auf " + str.tostring(tsl_final_pct, "#.##") + "%", alert.freq_once_per_bar)
+
+if pos == 1
+    peak := math.max(peak, high)
+    if low < peak * (1 - (tsl_final_pct/100/hebel))
+        pos := 0, locked := true
+        alert("SILVER TSL HIT: Exit Long.", alert.freq_once_per_bar)
+
+if pos == -1
+    peak := math.min(peak, low)
+    if high > peak * (1 + (tsl_final_pct/100/hebel))
+        pos := 0, locked := true
+        alert("SILVER TSL HIT: Exit Short.", alert.freq_once_per_bar)
+
+if exit_sig and pos != 0
+    pos := 0
+    alert("SILVER SIGNAL EXIT: Trendbruch.", alert.freq_once_per_bar)
+
+// Markierungen im Chart
+plotshape(buy_long, "BUY SILVER", shape.labelup, location.belowbar, color.silver, size=size.small, text="BUY SILVER", textcolor=color.black)
+plotshape(buy_short, "SHORT SILVER", shape.labeldown, location.abovebar, color.red, size=size.small, text="SHORT SILVER", textcolor=color.white)
+plotshape(exit_sig and pos[1] != 0, "EXIT", shape.xcross, location.abovebar, color.orange, size=size.tiny, text="EXIT")
+
+// Regime-Warnungen (Flags)
+plotshape(ta.crossover(vxslv_val, vix_critical), "VXSLV SPIKE", shape.flag, location.top, color.red, size=size.small, text="VXSLV CRITICAL!")
+plotshape(is_extreme and pos != 0, "PROTECTION ACTIVE", shape.circle, location.top, color.orange, size=size.tiny, title="Tight TSL Active")
+
+// --- 6. DASHBOARD (KOMPAKT & INFORMATIV) ---
+var table dash = table.new(position.top_right, 2, 6, bgcolor=color.new(color.black, 70), border_width=1, border_color=color.gray)
+if barstate.islast
+    h = 3.0, c_red = color.new(color.red, 20), c_green = color.new(color.green, 20), c_ora = color.new(color.orange, 20)
+    
+    table.cell(dash, 0, 0, "SILVER HYBRID", text_color=color.white, height=h)
+    table.cell(dash, 1, 0, pos == 1 ? "LONG" : pos == -1 ? "SHORT" : "CASH", bgcolor=pos == 0 ? color.gray : (pos == 1 ? c_green : c_red), height=h)
+    
+    table.cell(dash, 0, 1, "VXSLV (Silver VIX)", text_color=color.white, height=h)
+    table.cell(dash, 1, 1, str.tostring(vxslv_val, "#.##"), bgcolor=vxslv_val > vix_critical ? c_ora : c_green, height=h)
+    
+    table.cell(dash, 0, 2, "ADX (" + str.tostring(adx_entry) + ")", text_color=color.white, height=h)
+    table.cell(dash, 1, 2, str.tostring(adx, "#.##"), bgcolor=adx > adx_entry ? c_green : c_red, height=h)
+    
+    table.cell(dash, 0, 3, "TSL Modus", text_color=color.white, height=h)
+    table.cell(dash, 1, 3, tsl_atr_pct < tsl_hard_pct ? "ATR-DYN" : "HARD-CAP", bgcolor=tsl_atr_pct < tsl_hard_pct ? c_green : c_ora, height=h)
+    
+    table.cell(dash, 0, 4, "BROKER TSL %", text_color=color.white, height=h)
+    table.cell(dash, 1, 4, str.tostring(tsl_final_pct, "#.##") + "%", bgcolor=color.yellow, text_color=color.black, height=h)
+    
+    stop_price = pos == 1 ? peak * (1 - (tsl_final_pct/100/hebel)) : peak * (1 + (tsl_final_pct/100/hebel))
+    table.cell(dash, 0, 5, "STOP PREIS", text_color=color.white, height=h)
+    table.cell(dash, 1, 5, str.tostring(stop_price, "#.###"), bgcolor=color.white, text_color=color.black, height=h)

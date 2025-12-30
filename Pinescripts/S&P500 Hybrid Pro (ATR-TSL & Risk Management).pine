@@ -1,0 +1,132 @@
+//@version=5
+indicator("SP500 Hybrid Pro [VIX & Hard-Cap]", overlay=true, max_labels_count=500)
+
+// --- 1. INPUTS ---
+vortex_grp     = "Vortex & Trend Parameter"
+vortex_len     = input.int(20, "Vortex Periode", group=vortex_grp)
+ema_len        = input.int(7, "Vortex EMA Glättung", group=vortex_grp)
+adx_len        = input.int(14, "ADX Periode", group=vortex_grp)
+adx_entry      = input.int(23, "ADX Einstieg", group=vortex_grp)
+adx_exit       = input.int(17, "ADX Ausstieg (Hysterese)", group=vortex_grp)
+
+risk_grp       = "Risikomanagement (VIX & Hard-Cap)"
+vix_ticker     = input.symbol("TVC:VIX", "VIX Datenquelle", group=risk_grp)
+vix_critical   = input.float(28.0, "VIX Kritisch (Tight TSL)", group=risk_grp)
+hebel          = input.float(3.0, "Hebel (z.B. 3 für 3USL)", group=risk_grp)
+atr_mult_std   = input.float(4.8, "Standard ATR Mult", group=risk_grp)
+atr_mult_tight = input.float(2.8, "Tight ATR Mult (VIX/ADX > 50)", group=risk_grp)
+hard_cap_pct   = input.float(12.0, "Hard-Cap Stop % (ungehebelt)", group=risk_grp)
+
+// --- 2. DATENBESCHAFFUNG ---
+// VIX Daten abrufen
+vix_val = request.security(vix_ticker, "D", close)
+
+// Hilfsfunktion Vortex Komponenten
+get_vortex() =>
+    vmp = math.abs(high - low[1]), vmm = math.abs(low - high[1])
+    tr  = math.max(high - low, math.abs(high - close[1]), math.abs(low - close[1]))
+    [vmp, vmm, tr]
+
+// Master Trend (Weekly)
+[w_vmp, w_vmm, w_tr] = request.security(syminfo.tickerid, "W", get_vortex(), lookahead=barmerge.lookahead_off)
+w_vi_plus  = ta.sma(w_vmp, vortex_len) * vortex_len
+w_vi_minus = ta.sma(w_vmm, vortex_len) * vortex_len
+master_trend_long = w_vi_plus > w_vi_minus
+
+// Daily Signals
+[d_vmp, d_vmm, d_tr] = get_vortex()
+vi_plus_raw  = (ta.sma(d_vmp, vortex_len) * vortex_len) / (ta.sma(d_tr, vortex_len) * vortex_len)
+vi_minus_raw = (ta.sma(d_vmm, vortex_len) * vortex_len) / (ta.sma(d_tr, vortex_len) * vortex_len)
+vi_plus_ema  = ta.ema(vi_plus_raw, ema_len), vi_minus_ema = ta.ema(vi_minus_raw, ema_len)
+
+[_, _, adx] = ta.dmi(adx_len, adx_len)
+atr = ta.atr(14)
+
+// --- 3. DYNAMISCHE TSL LOGIK ---
+// Regime-Erkennung
+is_extreme = adx > 50 or vix_val > vix_critical
+current_mult = is_extreme ? atr_mult_tight : atr_mult_std
+
+// ATR-TSL vs Hard-Cap Berechnung
+tsl_atr_pct = (atr * current_mult / close) * 100 * hebel
+tsl_hard_pct = hard_cap_pct * hebel
+tsl_final_pct = math.min(tsl_atr_pct, tsl_hard_pct)
+
+// --- 4. POSITION MANAGEMENT & ALERTS ---
+var int pos = 0
+var float peak = 0.0
+var bool locked = false
+
+// Signale
+long_cond  = adx > adx_entry and master_trend_long and vi_plus_ema > vi_minus_ema
+short_cond = adx > adx_entry and not master_trend_long and vi_minus_ema > vi_plus_ema
+
+if pos == 0 and vi_minus_ema > vi_plus_ema
+    locked := false
+
+// Trigger
+buy_long  = long_cond and pos != 1 and not locked
+buy_short = short_cond and pos != -1 and not locked
+exit_sig  = (pos == 1 and (adx < adx_exit or not (master_trend_long and vi_plus_ema > vi_minus_ema))) or 
+             (pos == -1 and (adx < adx_exit or not (not master_trend_long and vi_minus_ema > vi_plus_ema)))
+
+// Execution Simulation
+if buy_long
+    pos := 1, peak := high
+    alert("ENTRY LONG S&P 500 (3USL): Master-Trend BULL. Setze Broker TSL auf " + str.tostring(tsl_final_pct, "#.##") + "%", alert.freq_once_per_bar)
+
+if buy_short
+    pos := -1, peak := low
+    alert("ENTRY SHORT S&P 500 (3ULS): Master-Trend BEAR. Setze Broker TSL auf " + str.tostring(tsl_final_pct, "#.##") + "%", alert.freq_once_per_bar)
+
+if pos == 1
+    peak := math.max(peak, high)
+    if low < peak * (1 - (tsl_final_pct/100/hebel))
+        pos := 0, locked := true
+        alert("TSL HIT: Long Position geschlossen. Kapital sichern!", alert.freq_once_per_bar)
+
+if pos == -1
+    peak := math.min(peak, low)
+    if high > peak * (1 + (tsl_final_pct/100/hebel))
+        pos := 0, locked := true
+        alert("TSL HIT: Short Position geschlossen. Kapital sichern!", alert.freq_once_per_bar)
+
+if exit_sig and pos != 0
+    pos := 0
+    alert("SIGNAL EXIT: Trend-Erschöpfung erkannt. Glattstellen!", alert.freq_once_per_bar)
+
+// Regime-Warnung (VIX/ADX)
+if ta.crossover(vix_val, vix_critical) and pos != 0
+    alert("RISIKO ALERT: VIX über " + str.tostring(vix_critical) + "! TSL beim Broker SOFORT verschärfen auf: " + str.tostring(tsl_final_pct, "#.##") + "%", alert.freq_once_per_bar)
+
+// --- 5. VISUALISIERUNG & DASHBOARD ---
+plotshape(buy_long, "BUY", shape.triangleup, location.belowbar, color.green, size=size.small, text="BUY LONG")
+plotshape(buy_short, "SHORT", shape.triangledown, location.abovebar, color.red, size=size.small, text="BUY SHORT")
+plotshape(is_extreme and pos != 0, "CRASH PROT", shape.flag, location.top, color.orange, size=size.tiny)
+var table dash = table.new(position.top_right, 2, 6, bgcolor=color.new(color.black, 70), border_width=1, border_color=color.gray)
+
+if barstate.islast
+    // HIER DIE ÄNDERUNG: h von 2.0 auf 1.0 reduziert
+    h = 3.0, s = size.small
+    c_red = color.new(color.red, 20), c_green = color.new(color.green, 20), c_orange = color.new(color.orange, 20)
+    
+    // Die Zellen nutzen nun die reduzierte Höhe 'h'
+    table.cell(dash, 0, 0, "SPX PRO", text_color=color.white, height=h)
+    table.cell(dash, 1, 0, pos == 1 ? "LONG" : pos == -1 ? "SHORT" : "CASH", bgcolor=pos == 0 ? color.gray : (pos == 1 ? c_green : c_red), height=h)
+    
+    table.cell(dash, 0, 1, "VIX Regime", text_color=color.white, height=h)
+    table.cell(dash, 1, 1, str.tostring(vix_val, "#.##"), bgcolor=vix_val > vix_critical ? c_orange : c_green, height=h)
+    
+    table.cell(dash, 0, 2, "ADX (" + str.tostring(adx_entry) + ")", text_color=color.white, height=h)
+    table.cell(dash, 1, 2, str.tostring(adx, "#.##"), bgcolor=adx > adx_entry ? c_green : c_red, height=h)
+    
+    table.cell(dash, 0, 3, "TSL Modus", text_color=color.white, height=h)
+    table.cell(dash, 1, 3, tsl_atr_pct < tsl_hard_pct ? "ATR" : "HARD-CAP", bgcolor=tsl_atr_pct < tsl_hard_pct ? c_green : c_orange, height=h)
+    
+    // Für die wichtigen Werte lassen wir die Höhe etwas flexibler oder nutzen ebenfalls 'h'
+    table.cell(dash, 0, 4, "BROKER TSL %", text_color=color.white, text_size=size.normal, height=h)
+    table.cell(dash, 1, 4, str.tostring(tsl_final_pct, "#.##") + "%", bgcolor=color.yellow, text_color=color.black, text_size=size.normal, height=h)
+    
+    stop_price = pos == 1 ? peak * (1 - (tsl_final_pct/100/hebel)) : peak * (1 + (tsl_final_pct/100/hebel))
+    table.cell(dash, 0, 5, "STOP PREIS", text_color=color.white, height=h)
+    table.cell(dash, 1, 5, str.tostring(stop_price, "#.####"), bgcolor=color.white, text_color=color.black, height=h)
