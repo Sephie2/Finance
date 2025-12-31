@@ -15,16 +15,16 @@ START_DATE       = "2020-01-01"
 INITIAL_CAPITAL  = 10000.0
 
 # Indikator Parameter (Silver Needs Speed & Room)
-VORTEX_PERIOD    = 14
-EMA_SPAN_VORTEX  = 10          # Stärkere Glättung für Silber-Rauschen
+VORTEX_PERIOD    = 12
+EMA_SPAN_VORTEX  = 15          # Stärkere Glättung für Silber-Rauschen
 ADX_PERIOD       = 14
-ADX_ENTRY_LEVEL  = 25          # Hohe Hürde, um "Fake-Ausbrüche" zu vermeiden
-ADX_EXIT_LEVEL   = 20          # Engere Hysterese für Silber
-VXSLV_CRITICAL   = 38.0        # Regime-Filter: Engerer Stop wenn VXSLV > 38
+ADX_ENTRY_LEVEL  = 21          # Hohe Hürde, um "Fake-Ausbrüche" zu vermeiden
+ADX_EXIT_LEVEL   = 21          # Engere Hysterese für Silber
+VXSLV_CRITICAL   = 21.13        # Regime-Filter: Engerer Stop wenn VXSLV > 38
 
 # Risiko & Stop-Loss (Hard-Cap Protection)
-ATR_MULT_STD     = 3.5         # Silber braucht weniger Platz als Gold, da explosiver
-ATR_MULT_TIGHT   = 2.0         
+ATR_MULT_STD     = 4.96         # Silber braucht weniger Platz als Gold, da explosiver
+ATR_MULT_TIGHT   = 1.78         
 MAX_PERCENT_STOP = 0.12        # Hard-Cap: 12% vom Peak (ungehebelt)
 HEBEL            = 3.0
 MASTER_TREND_RES = "3D"        # 3-Tage-Auflösung ist der Sweet-Spot für Silber

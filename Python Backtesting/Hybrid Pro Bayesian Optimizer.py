@@ -8,21 +8,21 @@ import matplotlib.ticker as mtick
 # --- 1. CONFIGURATION & STARTING VALUES ---
 # Zentrale Konfiguration für die Generalisierung
 BASE_CONFIG = {
-    "SYMBOL_FUTURES": "GC=F",
-    "SYMBOL_VOLA": "^GVZ",
-    "SYMBOL_LONG_ETF": "3GOL.L",
-    "SYMBOL_SHORT_ETF": "3GOS.L",
+    "SYMBOL_FUTURES": "SI=F",
+    "SYMBOL_VOLA": "^VXSLV",
+    "SYMBOL_LONG_ETF": "3LSI.L",
+    "SYMBOL_SHORT_ETF": "3SSI.L",
     "START_DATE": "2020-01-01",
     "MASTER_TREND_RES": "3D",
-    "TRIAL_RUNS": 200,
+    "TRIAL_RUNS": 100,
     # Startwerte für die Vortex-Optimierung
     "INIT_VORTEX_PERIOD": 14,
-    "INIT_VORTEX_EMA": 5,
-    "INIT_ADX_ENTRY": 20,
-    "INIT_ADX_EXIT": 18,
-    "INIT_VOLA_CRIT": 22.0,
-    "INIT_ATR_STD": 4.5,
-    "INIT_ATR_TIGHT": 2.5
+    "INIT_VORTEX_EMA": 10,
+    "INIT_ADX_ENTRY": 25,
+    "INIT_ADX_EXIT": 20,
+    "INIT_VOLA_CRIT": 38.0,
+    "INIT_ATR_STD": 3.5,
+    "INIT_ATR_TIGHT": 2.0
 }
 
 # --- 2. GLOBAL DATA LOADING ---
