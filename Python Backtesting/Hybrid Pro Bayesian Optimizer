@@ -5,25 +5,41 @@ import optuna
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mtick
 
-# --- 1. GLOBAL DATA LOADING (Einmalig für alle Trials) ---
-SYMBOL_FUTURES, SYMBOL_VIX = "ES=F", "^VIX"
-SYMBOL_LONG_ETF, SYMBOL_SHORT_ETF = "3USL.L", "3ULS.L"
-START_DATE = "2020-01-01"
+# --- 1. CONFIGURATION & STARTING VALUES ---
+# Zentrale Konfiguration für die Generalisierung
+BASE_CONFIG = {
+    "SYMBOL_FUTURES": "GC=F",
+    "SYMBOL_VOLA": "^GVZ",
+    "SYMBOL_LONG_ETF": "3GOL.L",
+    "SYMBOL_SHORT_ETF": "3GOS.L",
+    "START_DATE": "2020-01-01",
+    "MASTER_TREND_RES": "3D",
+    "TRIAL_RUNS": 200,
+    # Startwerte für die Vortex-Optimierung
+    "INIT_VORTEX_PERIOD": 14,
+    "INIT_VORTEX_EMA": 5,
+    "INIT_ADX_ENTRY": 20,
+    "INIT_ADX_EXIT": 18,
+    "INIT_VOLA_CRIT": 22.0,
+    "INIT_ATR_STD": 4.5,
+    "INIT_ATR_TIGHT": 2.5
+}
 
-# Daten einmalig laden, um die I/O-Last in den Trials zu minimieren
-raw_data = yf.download([SYMBOL_FUTURES, SYMBOL_VIX, SYMBOL_LONG_ETF, SYMBOL_SHORT_ETF], start=START_DATE, auto_adjust=True)
+# --- 2. GLOBAL DATA LOADING ---
+raw_data = yf.download([
+    BASE_CONFIG["SYMBOL_FUTURES"], 
+    BASE_CONFIG["SYMBOL_VOLA"], 
+    BASE_CONFIG["SYMBOL_LONG_ETF"], 
+    BASE_CONFIG["SYMBOL_SHORT_ETF"]
+], start=BASE_CONFIG["START_DATE"], auto_adjust=True)
 
-# Datenbereinigung
-df_fut = raw_data.xs(SYMBOL_FUTURES, axis=1, level=1).dropna()
-df_vix = raw_data['Close'][SYMBOL_VIX].ffill()
-price_long = raw_data['Close'][SYMBOL_LONG_ETF].ffill()
-price_short = raw_data['Close'][SYMBOL_SHORT_ETF].ffill()
+df_fut = raw_data.xs(BASE_CONFIG["SYMBOL_FUTURES"], axis=1, level=1).dropna()
+df_vola = raw_data['Close'][BASE_CONFIG["SYMBOL_VOLA"]].ffill()
+price_long = raw_data['Close'][BASE_CONFIG["SYMBOL_LONG_ETF"]].ffill()
 rets_long = price_long.pct_change().fillna(0)
-rets_short = price_short.pct_change().fillna(0)
-low_long = raw_data['Low'][SYMBOL_LONG_ETF].ffill()
-high_short = raw_data['High'][SYMBOL_SHORT_ETF].ffill()
+low_long = raw_data['Low'][BASE_CONFIG["SYMBOL_LONG_ETF"]].ffill()
 
-# --- 2. HILFSFUNKTIONEN (Indikatoren) ---
+# --- 3. HELPER FUNCTIONS ---
 def calculate_vortex(df, period, ema_span):
     h_l = df['High'] - df['Low']
     tr = pd.concat([h_l, abs(df['High']-df['Close'].shift(1)), abs(df['Low']-df['Close'].shift(1))], axis=1).max(axis=1)
@@ -43,73 +59,86 @@ def calculate_adx(df, period):
     dx = 100 * abs(p_di - m_di) / (p_di + m_di)
     return dx.rolling(period).mean()
 
-# --- 3. OBJECTIVE FUNCTION (Die Optimierungs-Logik) ---
+# --- 4. OBJECTIVE FUNCTION ---
 def objective(trial):
     # Search Space Definition
-    v_period = trial.suggest_int("V_PERIOD", 14, 30)
-    v_ema = trial.suggest_int("V_EMA", 5, 12)
-    adx_entry = trial.suggest_int("ADX_ENTRY", 18, 28)
-    adx_exit = trial.suggest_int("ADX_EXIT", 14, 20)
-    vix_crit = trial.suggest_float("VIX_CRIT", 24.0, 32.0)
-    atr_std = trial.suggest_float("ATR_STD", 4.0, 5.5)
-    atr_tight = trial.suggest_float("ATR_TIGHT", 2.5, 3.5)
-
-    # Signale berechnen
-    w_fut = df_fut.resample("W").agg({'High':'max', 'Low':'min', 'Close':'last'})
+    v_period  = trial.suggest_int("V_PERIOD", 10, 35)
+    v_ema     = trial.suggest_int("V_EMA", 3, 15)
+    adx_entry = trial.suggest_int("ADX_ENTRY", 15, 30)
+    adx_exit  = trial.suggest_int("ADX_EXIT", 12, 22)
+    vola_crit = trial.suggest_float("VOLA_CRIT", 15.0, 35.0)
+    atr_std   = trial.suggest_float("ATR_STD", 3.0, 6.0)
+    atr_tight = trial.suggest_float("ATR_TIGHT", 1.5, 4.0)
+    
+    # Master Trend Logic
+    w_fut = df_fut.resample(BASE_CONFIG["MASTER_TREND_RES"]).agg({'High':'max', 'Low':'min', 'Close':'last'})
     w_vi_p, w_vi_m = calculate_vortex(w_fut, v_period, v_ema)
     master_trend = (w_vi_p > w_vi_m).reindex(df_fut.index, method='ffill').shift(1).fillna(False)
-
+    
+    # Daily Logic
     d_vi_p, d_vi_m = calculate_vortex(df_fut, v_period, v_ema)
     d_adx = calculate_adx(df_fut, 14)
-    d_atr = pd.concat([df_fut['High']-df_fut['Low'], abs(df_fut['High']-df_fut['Close'].shift(1)), abs(df_fut['Low']-df_fut['Close'].shift(1))], axis=1).max(axis=1).rolling(14).mean()
-
-    # Simulation
-    cap = 10000.0
-    equity = [cap]
+    d_atr = pd.concat([df_fut['High']-df_fut['Low'], abs(df_fut['High']-df_fut['Close'].shift(1)), 
+                       abs(df_fut['Low']-df_fut['Close'].shift(1))], axis=1).max(axis=1).rolling(14).mean()
+    
+    cap, equity = 10000.0, [10000.0]
     pos, peak_price, stop_level = 0, 0.0, 0.0
     hebel = 3.0
-
+    
     for i in range(1, len(df_fut)):
-        adx_v, atr_v, vix_v = d_adx.iloc[i-1], d_atr.iloc[i-1], df_vix.iloc[i-1]
+        adx_v, atr_v, vola_v = d_adx.iloc[i-1], d_atr.iloc[i-1], df_vola.iloc[i-1]
         m_t, vi_p, vi_m = master_trend.iloc[i-1], d_vi_p.iloc[i-1], d_vi_m.iloc[i-1]
-
-        # Exit Check (Daily Lag)
+        
         if pos != 0:
-            c_low = low_long.iloc[i] if pos == 1 else 0 # Short Logik hier vereinfacht
+            c_low = low_long.iloc[i]
             if (pos == 1 and c_low < stop_level) or (adx_v < adx_exit):
                 pos = 0
             elif not (m_t and vi_p > vi_m):
                 pos = 0
 
-        # Entry Check
         if pos == 0 and adx_v > adx_entry:
             if m_t and vi_p > vi_m:
                 pos, peak_price = 1, price_long.iloc[i]
 
-        # Stop Update
         if pos != 0:
             peak_price = max(peak_price, price_long.iloc[i])
-            mult = atr_tight if (adx_v > 50 or vix_v > vix_crit) else atr_std
+            mult = atr_tight if (adx_v > 50 or vola_v > vola_crit) else atr_std
             tsl = min((atr_v * mult / df_fut['Close'].iloc[i]) * hebel, 0.12 * hebel)
             stop_level = peak_price * (1 - tsl)
 
         cap *= (1 + (rets_long.iloc[i] if pos == 1 else 0))
         equity.append(cap)
-
-    # Fitness Metric: Sharpe Ratio
+    
     eq_ser = pd.Series(equity).pct_change().fillna(0)
     if eq_ser.std() == 0: return -1
     sharpe = (eq_ser.mean() / eq_ser.std()) * np.sqrt(252)
-
-    # Wir speichern das Endkapital als Attribut im Trial
     trial.set_user_attr("final_cap", cap)
     return sharpe
 
-# --- 4. START OPTIMIZATION ---
+# --- 5. START OPTIMIZATION ---
 study = optuna.create_study(direction="maximize")
-study.optimize(objective, n_trials=100) # Starte mit 100 Durchläufen
 
-print("Optimierung abgeschlossen.")
+# Initialer Versuch mit den neuen Variablennamen einreihen
+study.enqueue_trial({
+    "V_PERIOD": BASE_CONFIG["INIT_VORTEX_PERIOD"],
+    "V_EMA": BASE_CONFIG["INIT_VORTEX_EMA"],
+    "ADX_ENTRY": BASE_CONFIG["INIT_ADX_ENTRY"],
+    "ADX_EXIT": BASE_CONFIG["INIT_ADX_EXIT"],
+    "VOLA_CRIT": BASE_CONFIG["INIT_VOLA_CRIT"],
+    "ATR_STD": BASE_CONFIG["INIT_ATR_STD"],
+    "ATR_TIGHT": BASE_CONFIG["INIT_ATR_TIGHT"]
+})
+
+study.optimize(objective, n_trials=BASE_CONFIG["TRIAL_RUNS"])
+
+# --- 6. OUTPUT ---
+print(f"\nDeployment-Zusammenfassung: {BASE_CONFIG['SYMBOL_LONG_ETF']}")
+print(f"Master-Trend Auflösung: {BASE_CONFIG['MASTER_TREND_RES']}")
+print(f"Optimierungsläufe: {BASE_CONFIG['TRIAL_RUNS']}")
+print("-" * 30)
 print(f"Beste Sharpe Ratio: {study.best_value:.4f}")
-print("Beste Parameter:", study.best_params)
-print(f"Bestes Endkapital: {study.best_trial.user_attrs['final_cap']:.2f} EUR")
+print("Beste Parameter:")
+for key, value in study.best_params.items():
+    print(f"  {key}: {value}")
+print(f"Volatility-Threshold (Optimiert): {study.best_params['VOLA_CRIT']:.4f}")
+print(f"Maximales Endkapital: {study.best_trial.user_attrs['final_cap']:.2f} EUR")
