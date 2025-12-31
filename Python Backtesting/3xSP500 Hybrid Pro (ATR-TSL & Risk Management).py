@@ -7,27 +7,27 @@ import matplotlib.ticker as mtick
 # =============================================================================
 # HEADER: STRATEGIE-VARIABLEN (MIT VIX, HARD-CAP & DAILY LAG)
 # =============================================================================
-SYMBOL_FUTURES   = "ES=F"      
-SYMBOL_VIX       = "^VIX"       
-SYMBOL_LONG_ETF  = "3USL.L"    
-SYMBOL_SHORT_ETF = "3ULS.L"    
+SYMBOL_FUTURES   = "ES=F"
+SYMBOL_VIX       = "^VIX"
+SYMBOL_LONG_ETF  = "3USL.L"
+SYMBOL_SHORT_ETF = "3ULS.L"
 START_DATE       = "2020-01-01"
 INITIAL_CAPITAL  = 10000.0
 
 # Indikator Parameter (Optimiert für SPX)
-VORTEX_PERIOD    = 20
-EMA_SPAN_VORTEX  = 7           
-ADX_PERIOD       = 14
-ADX_ENTRY_LEVEL  = 23          
-ADX_EXIT_LEVEL   = 17          
-VIX_CRITICAL     = 28.0        # Regime-Filter: Engerer Stop wenn VIX > 28
+VORTEX_PERIOD    = 30 #20
+EMA_SPAN_VORTEX  = 5    #7
+ADX_PERIOD       = 14   #14
+ADX_ENTRY_LEVEL  = 28     #23
+ADX_EXIT_LEVEL   = 16      #17
+VIX_CRITICAL     = 28.3564    #28.0    # Regime-Filter: Engerer Stop wenn VIX > 28
 
 # Risiko & Stop-Loss
-ATR_MULT_STD     = 4.8         
-ATR_MULT_TIGHT   = 2.8         
-MAX_PERCENT_STOP = 0.12        # Hard-Cap: Maximal 12% vom Peak (ungehebelt)
-HEBEL            = 3.0
-MASTER_TREND_RES = "W"         
+ATR_MULT_STD     = 4.44      #4.8
+ATR_MULT_TIGHT   = 3.1      # 2.8
+MAX_PERCENT_STOP = 0.12     #0.12   # Hard-Cap: Maximal 12% vom Peak (ungehebelt)
+HEBEL            = 3.0     #3.0    # Hebel des ETFs
+MASTER_TREND_RES = "W"
 # =============================================================================
 
 # --- 1. FUNKTIONEN ---
@@ -59,7 +59,7 @@ data = yf.download([SYMBOL_FUTURES, SYMBOL_VIX, SYMBOL_LONG_ETF, SYMBOL_SHORT_ET
 def clean_data(ticker):
     d = data['Close'][ticker].ffill()
     r = d.pct_change().fillna(0)
-    r[abs(r) > 0.5] = 0 
+    r[abs(r) > 0.5] = 0
     return r, d
 
 rets_long, price_long = clean_data(SYMBOL_LONG_ETF)
@@ -79,7 +79,7 @@ d_atr = pd.concat([df_fut['High']-df_fut['Low'], abs(df_fut['High']-df_fut['Clos
 # --- 4. SIMULATION MIT DAILY LAG ---
 cap = INITIAL_CAPITAL
 equity = [cap]
-pos = 0 
+pos = 0
 pos_size = 1.0
 peak_price = 0.0
 stop_level = 0.0 # Das "gepufferte" Stop-Level für den nächsten Tag
@@ -91,11 +91,11 @@ for i in range(1, len(df_fut)):
     vix_v = df_vix.iloc[i-1]
     m_trend = master_trend.iloc[i-1]
     vi_p, vi_m = d_vi_p.iloc[i-1], d_vi_m.iloc[i-1]
-    
+
     # Heutige Marktdaten (Intraday)
     curr_low = data['Low'][SYMBOL_LONG_ETF].iloc[i] if pos == 1 else data['Low'][SYMBOL_SHORT_ETF].iloc[i]
     curr_high = data['High'][SYMBOL_LONG_ETF].iloc[i] if pos == 1 else data['High'][SYMBOL_SHORT_ETF].iloc[i]
-    
+
     # A. EXIT LOGIK (Check gegen das Stop-Level vom VORABEND)
     if pos != 0:
         # TSL-Bruch Check
@@ -112,17 +112,17 @@ for i in range(1, len(df_fut)):
                 pos, peak_price = 1, data['High'][SYMBOL_LONG_ETF].iloc[i]
             elif not m_trend and vi_m > vi_p:
                 pos, peak_price = -1, data['Low'][SYMBOL_SHORT_ETF].iloc[i]
-    
+
     # C. STOP-LEVEL UPDATE FÜR DEN NÄCHSTEN TAG (Dein "Abend-Ritual")
     if pos != 0:
         # Bestimme Peak
         if pos == 1: peak_price = max(peak_price, data['High'][SYMBOL_LONG_ETF].iloc[i])
         else: peak_price = min(peak_price, data['Low'][SYMBOL_SHORT_ETF].iloc[i])
-        
+
         # Berechne neuen dynamischen Stop-Abstand
         mult = ATR_MULT_TIGHT if (adx_v > 50 or vix_v > VIX_CRITICAL) else ATR_MULT_STD
         tsl_dist_pct = min((atr_v * mult / df_fut['Close'].iloc[i]) * HEBEL, MAX_PERCENT_STOP * HEBEL)
-        
+
         if pos == 1: stop_level = peak_price * (1 - tsl_dist_pct)
         else: stop_level = peak_price * (1 + tsl_dist_pct)
 
