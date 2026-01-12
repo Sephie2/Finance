@@ -1,0 +1,16 @@
+{
+    "NAME": "Silver Hybrid Sniper",
+    "SYMBOL_FUTURES": "SI=F",
+    "SYMBOL_VOLA": "^VXSLV",
+    "SYMBOL_LONG_ETF": "3LSI.L",
+    "SYMBOL_SHORT_ETF": "3SSI.L",
+    "HMA_LENGTH": 32,
+    "CHOP_LENGTH": 14,
+    "CHOP_THRESHOLD": 38.58,
+    "ATR_LENGTH": 14,
+    "ATR_MULT_STD": 6.68,
+    "ATR_MULT_TIGHT": 1.67,
+    "VOLA_CRITICAL": 29.61,
+    "MAX_PERCENT_STOP": 0.12,
+    "HEBEL": 3.0
+}

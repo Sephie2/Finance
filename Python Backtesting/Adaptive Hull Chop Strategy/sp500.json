@@ -1,0 +1,16 @@
+{
+    "NAME": "SP500 Hybrid Standard",
+    "SYMBOL_FUTURES": "ES=F",
+    "SYMBOL_VOLA": "^VIX",
+    "SYMBOL_LONG_ETF": "3USL.L",
+    "SYMBOL_SHORT_ETF": "3USS.L",
+    "HMA_LENGTH": 60,
+    "CHOP_LENGTH": 14,
+    "CHOP_THRESHOLD": 55.0,
+    "ATR_LENGTH": 14,
+    "ATR_MULT_STD": 4.0,
+    "ATR_MULT_TIGHT": 2.0,
+    "VOLA_CRITICAL": 30.0,
+    "MAX_PERCENT_STOP": 0.08,
+    "HEBEL": 3.0
+}

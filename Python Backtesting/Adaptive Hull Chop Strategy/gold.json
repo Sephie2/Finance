@@ -1,0 +1,16 @@
+{
+    "NAME": "Gold Hybrid Standard",
+    "SYMBOL_FUTURES": "GC=F",
+    "SYMBOL_VOLA": "^GVZ",
+    "SYMBOL_LONG_ETF": "3GOL.L",
+    "SYMBOL_SHORT_ETF": "3GOS.L",
+    "HMA_LENGTH": 55,
+    "CHOP_LENGTH": 14,
+    "CHOP_THRESHOLD": 50.0,
+    "ATR_LENGTH": 14,
+    "ATR_MULT_STD": 4.5,
+    "ATR_MULT_TIGHT": 2.5,
+    "VOLA_CRITICAL": 22.0,
+    "MAX_PERCENT_STOP": 0.10,
+    "HEBEL": 3.0
+}

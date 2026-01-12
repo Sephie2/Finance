@@ -1,0 +1,251 @@
+//@version=5
+indicator("Hull-Chop Sniper [3x, Multi-Asset]", overlay=true, max_labels_count=500)
+
+// ==========================================
+// --- 1. CONFIGURATION LOADER ---
+// ==========================================
+// 1. Dropdown to select the asset profile
+// "Custom / Manual" allows you to type values in the settings menu.
+asset_profile = input.string("Silver (Optimized)", "Asset Preset", options=["Silver (Optimized)", "Gold (Standard)", "SP500 (Standard)", "Custom / Manual"], group="PROFILE SELECTOR")
+
+// 2. Define Groups for Manual Inputs
+strat_grp = "Strategy Settings (Custom Mode)"
+risk_grp  = "Risk Settings (Custom Mode)"
+
+// 3. Manual Inputs (Used ONLY when 'Custom' is selected)
+in_hma_len    = input.int(40, "HMA Length", group=strat_grp)
+in_chop_len   = input.int(15, "Chop Length", group=strat_grp)
+in_chop_limit = input.float(40.1, "Chop Limit", step=0.1, group=strat_grp)
+
+in_vx_ticker  = input.symbol("VXSLV", "Vola Ticker", group=risk_grp)
+in_vx_crit    = input.float(28.0, "Vola Critical Level", group=risk_grp)
+in_hebel      = input.float(3.0, "Leverage (e.g. 3.0)", group=risk_grp)
+in_atr_std    = input.float(5.9, "ATR Mult (Standard)", step=0.1, group=risk_grp)
+in_atr_tight  = input.float(2.9, "ATR Mult (Tight)", step=0.1, group=risk_grp)
+in_hard_cap   = input.float(12.0, "Hard Cap %", group=risk_grp)
+
+// --- INTERNAL PRESET DATABASE ---
+// This acts like your JSON files. Update these lines when you optimize new assets.
+
+// A. Silver Values (Based on your latest optimization)
+// Note: I put the 'safer' V1 values here as default, you can swap to V2 if you want the aggressive one.
+s_hma=40, s_chop_len=15, s_chop_limit=40.1, s_vx="VXSLV", s_vx_crit=28.05, s_hebel=3.0, s_atr_std=5.89, s_atr_tight=2.88, s_hard=12.0
+
+// B. Gold Values (Placeholder - To be optimized)
+g_hma=55, g_chop_len=14, g_chop_limit=50.0, g_vx="GVZ", g_vx_crit=22.0, g_hebel=3.0, g_atr_std=4.5, g_atr_tight=2.5, g_hard=10.0
+
+// C. SP500 Values (Placeholder - To be optimized)
+sp_hma=60, sp_chop_len=14, sp_chop_limit=55.0, sp_vx="VIX", sp_vx_crit=30.0, sp_hebel=3.0, sp_atr_std=4.0, sp_atr_tight=2.0, sp_hard=8.0
+
+// --- LOGIC TO SELECT VALUES ---
+get_val(profile, custom_val, s_val, g_val, sp_val) =>
+    if profile == "Silver (Optimized)"
+        s_val
+    else if profile == "Gold (Standard)"
+        g_val
+    else if profile == "SP500 (Standard)"
+        sp_val
+    else
+        custom_val
+
+// Assign final variables based on selection
+hma_len      = get_val(asset_profile, in_hma_len, s_hma, g_hma, sp_hma)
+chop_len     = get_val(asset_profile, in_chop_len, s_chop_len, g_chop_len, sp_chop_len)
+chop_limit   = get_val(asset_profile, in_chop_limit, s_chop_limit, g_chop_limit, sp_chop_limit)
+vxslv_crit   = get_val(asset_profile, in_vx_crit, s_vx_crit, g_vx_crit, sp_vx_crit)
+hebel        = get_val(asset_profile, in_hebel, s_hebel, g_hebel, sp_hebel)
+atr_mult_std = get_val(asset_profile, in_atr_std, s_atr_std, g_atr_std, sp_atr_std)
+atr_mult_tight=get_val(asset_profile, in_atr_tight, s_atr_tight, g_atr_tight, sp_atr_tight)
+hard_cap_pct = get_val(asset_profile, in_hard_cap, s_hard, g_hard, sp_hard)
+
+// Ticker handling (Must be string for security)
+active_ticker = asset_profile == "Silver (Optimized)" ? "CBOE:VXSLV" : (asset_profile == "Gold (Standard)" ? "CBOE:GVZ" : (asset_profile == "SP500 (Standard)" ? "CBOE:VIX" : in_vx_ticker))
+
+// ==========================================
+// --- 2. CALCULATIONS (Engine) ---
+// ==========================================
+// A. Hull Moving Average
+hma = ta.hma(close, hma_len)
+hma_rising = hma > hma[1]
+
+// B. Weekly Master Trend (Context)
+w_hma = request.security(syminfo.tickerid, "W", ta.hma(close, 21))
+w_trend_up = close > w_hma
+
+// C. Choppiness Index
+log10(x) => math.log(x) / math.log(10)
+atr_sum = math.sum(ta.atr(1), chop_len)
+high_low_diff = ta.highest(chop_len) - ta.lowest(chop_len)
+denom = high_low_diff == 0 ? 1 : high_low_diff 
+chop = 100 * log10(atr_sum / denom) / log10(chop_len)
+
+// D. Vola & ATR
+vxslv_val = request.security(active_ticker, "D", close)
+atr = ta.atr(14) 
+
+// Regime Detection
+is_high_vola = vxslv_val > vxslv_crit
+is_choppy    = chop > chop_limit 
+
+// ==========================================
+// --- 3. STATE MACHINE (Logic) ---
+// ==========================================
+var int pos = 0        
+var float peak = 0.0   
+var bool locked = false 
+var int last_dir = 0
+var float stop_lvl_display = na 
+
+// Reset Logic
+if pos == 0 and locked
+    bool tech_reset = false
+    if last_dir == 1 and not hma_rising 
+        tech_reset := true
+    if last_dir == -1 and hma_rising 
+        tech_reset := true
+        
+    if tech_reset
+        locked := false
+
+// Entry Conditions
+trend_long  = close > hma and hma_rising
+trend_short = close < hma and not hma_rising
+
+entry_long_cond  = pos == 0 and not locked and trend_long and not is_choppy
+entry_short_cond = pos == 0 and not locked and trend_short and not is_choppy
+
+// --- TSL CALCULATION ---
+is_stress = is_high_vola or chop > 50 
+current_mult = is_stress ? atr_mult_tight : atr_mult_std
+tsl_dist_pct = (atr * current_mult / close) * 100 * hebel
+final_pct    = math.min(tsl_dist_pct, hard_cap_pct * hebel)
+
+// ==========================================
+// --- 4. EXECUTION & EVENT FLAGS ---
+// ==========================================
+bool evt_buy_long  = false
+bool evt_buy_short = false
+bool evt_exit_tsl  = false
+bool evt_exit_trend = false
+float exit_price   = na
+
+// Entries
+if entry_long_cond
+    pos := 1, peak := high, last_dir := 1
+    evt_buy_long := true
+
+if entry_short_cond
+    pos := -1, peak := low, last_dir := -1
+    evt_buy_short := true
+
+// Exits
+if pos == 1
+    peak := math.max(peak, high)
+    stop_price = peak * (1 - (final_pct/100/hebel))
+    stop_lvl_display := stop_price
+    
+    if low < stop_price
+        pos := 0, locked := true
+        evt_exit_tsl := true
+        exit_price := stop_price
+    else if close < hma
+        pos := 0
+        evt_exit_trend := true
+        exit_price := close
+
+if pos == -1
+    peak := math.min(peak, low)
+    stop_price = peak * (1 + (final_pct/100/hebel))
+    stop_lvl_display := stop_price
+
+    if high > stop_price
+        pos := 0, locked := true
+        evt_exit_tsl := true
+        exit_price := stop_price
+    else if close > hma
+        pos := 0
+        evt_exit_trend := true
+        exit_price := close
+
+if pos == 0
+    stop_lvl_display := na
+
+// ==========================================
+// --- 5. ALERTS ---
+// ==========================================
+if evt_buy_long
+    alert("ENTRY LONG (" + asset_profile + "): Trend Start. TSL " + str.tostring(final_pct, "#.##") + "%", alert.freq_once_per_bar)
+if evt_buy_short
+    alert("ENTRY SHORT (" + asset_profile + "): Trend Start. TSL " + str.tostring(final_pct, "#.##") + "%", alert.freq_once_per_bar)
+if evt_exit_tsl
+    alert("EXIT (" + asset_profile + "): TSL Hit. LOCKED.", alert.freq_once_per_bar)
+if evt_exit_trend
+    alert("EXIT (" + asset_profile + "): Trend End.", alert.freq_once_per_bar)
+
+// ==========================================
+// --- 6. VISUALS ---
+// ==========================================
+plot(hma, "HMA Trend", color=hma_rising ? color.green : color.red, linewidth=2)
+plot(pos != 0 ? stop_lvl_display : na, "Active TSL", color=color.new(color.blue, 30), style=plot.style_linebr)
+
+plotshape(evt_buy_long, "Entry Long", shape.triangleup, location.belowbar, color.lime, size=size.small, text="Long")
+plotshape(evt_buy_short, "Entry Short", shape.triangledown, location.abovebar, color.red, size=size.small, text="Short")
+plotshape(evt_exit_tsl ? exit_price : na, "TSL HIT", shape.xcross, location.absolute, color.orange, size=size.small)
+plotshape(evt_exit_trend ? exit_price : na, "Trend Exit", shape.circle, location.absolute, color.gray, size=size.tiny)
+plotshape(is_high_vola and pos!=0, "High Vola", shape.flag, location.top, color.red, size=size.small)
+bgcolor(is_choppy ? color.new(color.gray, 90) : na, title="Choppy Zone")
+
+// ==========================================
+// --- 7. DASHBOARD ---
+// ==========================================
+var table dash = table.new(position.top_right, 2, 8, bgcolor=color.new(color.black, 70), border_width=1, border_color=color.gray)
+if barstate.islast
+    h = 3.0
+    c_red = color.new(color.red, 20), c_green = color.new(color.green, 20), c_ora = color.new(color.orange, 20)
+    
+    // Header (Displays current profile)
+    table.cell(dash, 0, 0, "SNIPER: " + str.replace_all(asset_profile, " (Optimized)", ""), text_color=color.white, height=h)
+    
+    // Status
+    string status_txt = pos == 1 ? "LONG" : (pos == -1 ? "SHORT" : (locked ? "LOCKED" : "WAIT"))
+    color status_col = pos == 0 ? (locked ? c_red : color.gray) : (pos == 1 ? c_green : c_red)
+    table.cell(dash, 1, 0, status_txt, bgcolor=status_col, height=h, text_color=color.white)
+    
+    // Vola
+    table.cell(dash, 0, 1, "VOLA (" + str.tostring(vxslv_crit) + ")", text_color=color.white, height=h)
+    table.cell(dash, 1, 1, str.tostring(vxslv_val, "#.##"), bgcolor=is_high_vola ? c_red : c_green, height=h, text_color=color.white)
+    
+    // Chop
+    table.cell(dash, 0, 2, "CHOP (< " + str.tostring(chop_limit) + ")", text_color=color.white, height=h)
+    table.cell(dash, 1, 2, str.tostring(chop, "#.1f"), bgcolor=is_choppy ? c_red : c_green, height=h, text_color=color.white)
+    
+    // HMA
+    table.cell(dash, 0, 3, "HMA Trend", text_color=color.white, height=h)
+    table.cell(dash, 1, 3, hma_rising ? "UP" : "DOWN", bgcolor=hma_rising ? c_green : c_red, height=h, text_color=color.white)
+    
+    // Weekly
+    string w_txt = "NEUTRAL"
+    color w_bg = color.gray
+    if pos == 1 
+        w_txt := w_trend_up ? "STRONG" : "REVERSAL"
+        w_bg := w_trend_up ? c_green : c_ora
+    else if pos == -1
+        w_txt := not w_trend_up ? "STRONG" : "REVERSAL"
+        w_bg := not w_trend_up ? c_green : c_ora
+    else
+        w_txt := w_trend_up ? "BULLISH" : "BEARISH"
+        
+    table.cell(dash, 0, 4, "Weekly Context", text_color=color.white, height=h)
+    table.cell(dash, 1, 4, w_txt, bgcolor=w_bg, height=h, text_color=color.white)
+    
+    // TSL
+    table.cell(dash, 0, 5, "BROKER TSL %", text_color=color.white, height=h)
+    table.cell(dash, 1, 5, str.tostring(final_pct, "#.##") + "%", bgcolor=color.yellow, text_color=color.black, height=h)
+    
+    // Price
+    table.cell(dash, 0, 6, "STOP PREIS", text_color=color.white, height=h)
+    table.cell(dash, 1, 6, pos != 0 ? str.tostring(stop_lvl_display, "#.###") : "-", bgcolor=color.white, text_color=color.black, height=h)
+    
+    // Profile Info
+    table.cell(dash, 0, 7, "ACTIVE PROFILE", text_color=color.gray, height=h)
+    table.cell(dash, 1, 7, asset_profile, text_color=color.gray, height=h)
