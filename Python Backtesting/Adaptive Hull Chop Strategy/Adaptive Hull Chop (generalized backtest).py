@@ -12,7 +12,7 @@ import sys
 # =============================================================================
 
 # Wähle hier das Asset aus (muss dem Dateinamen entsprechen: 'silver', 'gold', 'sp500')
-SELECTED_ASSET = "silver" 
+SELECTED_ASSET = "gold2" 
 
 def load_config(asset_name):
     """Lädt die Konfiguration aus einer externen JSON-Datei."""

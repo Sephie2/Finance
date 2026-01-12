@@ -10,7 +10,7 @@ import sys
 # =============================================================================
 # 1. KONFIGURATION & LOADING
 # =============================================================================
-SELECTED_ASSET = "silver" 
+SELECTED_ASSET = "gold2" 
 
 def load_config(asset_name):
     filename = f"{asset_name.lower()}.json"

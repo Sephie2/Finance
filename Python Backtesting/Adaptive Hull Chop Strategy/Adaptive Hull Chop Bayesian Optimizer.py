@@ -15,8 +15,8 @@ optuna.logging.set_verbosity(optuna.logging.WARNING)
 # =============================================================================
 
 # Wähle das Asset, das optimiert werden soll (muss als .json existieren)
-SELECTED_ASSET = "silver" 
-TRIAL_RUNS = 500  # Anzahl der Versuche
+SELECTED_ASSET = "gold" 
+TRIAL_RUNS = 100  # Anzahl der Versuche
 
 def load_config(asset_name):
     filename = f"{asset_name.lower()}.json"
