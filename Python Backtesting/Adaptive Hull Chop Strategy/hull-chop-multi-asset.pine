@@ -31,11 +31,11 @@ in_hard_cap   = input.float(12.0, "Hard Cap %", group=risk_grp)
 // Note: I put the 'safer' V1 values here as default, you can swap to V2 if you want the aggressive one.
 s_hma=40, s_chop_len=15, s_chop_limit=40.1, s_vx="VXSLV", s_vx_crit=28.05, s_hebel=3.0, s_atr_std=5.89, s_atr_tight=2.88, s_hard=12.0
 
-// B. Gold Values (Placeholder - To be optimized)
-g_hma=55, g_chop_len=14, g_chop_limit=50.0, g_vx="GVZ", g_vx_crit=22.0, g_hebel=3.0, g_atr_std=4.5, g_atr_tight=2.5, g_hard=10.0
+// B. Gold Values (optimized)
+g_hma=66, g_chop_len=13, g_chop_limit=37.7, g_vx="CBOE:GVZ", g_vx_crit=34.2, g_hebel=3.0, g_atr_std=6.9, g_atr_tight=1.65, g_hard=10.0
 
-// C. SP500 Values (Placeholder - To be optimized)
-sp_hma=60, sp_chop_len=14, sp_chop_limit=55.0, sp_vx="VIX", sp_vx_crit=30.0, sp_hebel=3.0, sp_atr_std=4.0, sp_atr_tight=2.0, sp_hard=8.0
+// C. SP500 Values (optimized)
+sp_hma=66, sp_chop_len=20, sp_chop_limit=47.8, sp_vx="CBOE:VIX", sp_vx_crit=34.4, sp_hebel=3.0, sp_atr_std=6.4, sp_atr_tight=3.9, sp_hard=8.0
 
 // --- LOGIC TO SELECT VALUES ---
 get_val(profile, custom_val, s_val, g_val, sp_val) =>
