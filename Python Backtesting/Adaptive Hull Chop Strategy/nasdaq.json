@@ -1,0 +1,16 @@
+{
+    "NAME": "NASDAQ 100 3x",
+    "SYMBOL_FUTURES": "NQ=F",
+    "SYMBOL_VOLA": "^VXN",
+    "SYMBOL_LONG_ETF": "QQQ3.L",
+    "SYMBOL_SHORT_ETF": "QQQS.L",
+    "HMA_LENGTH": 71,
+    "CHOP_LENGTH": 16,
+    "CHOP_THRESHOLD": 44.44,
+    "ATR_LENGTH": 14,
+    "ATR_MULT_STD": 5.83,
+    "ATR_MULT_TIGHT": 1.94,
+    "VOLA_CRITICAL": 37.3,
+    "MAX_PERCENT_STOP": 0.12,
+    "HEBEL": 3.0
+}
